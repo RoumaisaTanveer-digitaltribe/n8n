@@ -33,6 +33,8 @@ ai-task-extraction-n8n/
     ├── sample_input.txt                    # messy meeting-style sample text
     └── sample_request.sh                   # curl test script
 ```
+<img width="943" height="619" alt="Screenshot 2026-07-06 132925" src="https://github.com/user-attachments/assets/e34c102b-8a0b-4afd-9e7f-5a136fd61878" />
+
 
 ## Setup
 
