@@ -1,0 +1,286 @@
+{
+  "name": "AI Task Extraction Workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "extract-tasks",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "1a1b1c1d-0001-4a4a-8a8a-000000000001",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-1180, 260],
+      "webhookId": "extract-tasks-webhook"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a1",
+              "name": "rawText",
+              "type": "string",
+              "value": "={{ $json.body?.text ?? $json.text ?? '' }}"
+            },
+            {
+              "id": "a2",
+              "name": "receivedAt",
+              "type": "string",
+              "value": "={{ $now.toISO() }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "1a1b1c1d-0002-4a4a-8a8a-000000000002",
+      "name": "Normalize Input",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [-960, 260]
+    },
+    {
+      "parameters": {
+        "jsCode": "if (!$json.rawText || $json.rawText.trim().length === 0) {\n  throw new Error('No text provided. Send { \"text\": \"...\" } in the webhook body.');\n}\nreturn $input.all();"
+      },
+      "id": "1a1b1c1d-0003-4a4a-8a8a-000000000003",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-740, 260]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  model: \"mistralai/mistral-7b-instruct\",\n  temperature: 0,\n  messages: [\n    {\n      role: \"system\",\n      content: \"You extract actionable tasks from messy meeting or chat text. Return ONLY valid JSON, no extra words, no markdown fences, matching this schema: {\\\"tasks\\\":[{\\\"task\\\":string,\\\"owner\\\":string,\\\"deadline\\\":string,\\\"priority\\\":\\\"High\\\"|\\\"Medium\\\"|\\\"Low\\\"}]}. If a field is missing in the text, infer a sensible default: owner=\\\"Unassigned\\\", deadline=\\\"Not specified\\\", priority=\\\"Medium\\\". Do not include any text outside the JSON object.\"\n    },\n    {\n      role: \"user\",\n      content: $json.rawText\n    }\n  ]\n}) }}",
+        "options": {}
+      },
+      "id": "1a1b1c1d-0004-4a4a-8a8a-000000000004",
+      "name": "AI Extract Tasks (OpenRouter)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-520, 260],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "OpenRouter Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $json.choices?.[0]?.message?.content ?? '{}';\n\nlet parsed;\ntry {\n  parsed = JSON.parse(raw);\n} catch (e) {\n  throw new Error('AI did not return valid JSON: ' + raw);\n}\n\nconst tasks = Array.isArray(parsed.tasks) ? parsed.tasks : [];\n\nconst cleaned = tasks\n  .filter(t => t && t.task)\n  .map(t => ({\n    task: String(t.task).trim(),\n    owner: t.owner ? String(t.owner).trim() : 'Unassigned',\n    deadline: t.deadline ? String(t.deadline).trim() : 'Not specified',\n    priority: ['High', 'Medium', 'Low'].includes(t.priority) ? t.priority : 'Medium'\n  }));\n\nreturn [{ json: { tasks: cleaned, sourceText: $('Normalize Input').item.json.rawText, processedAt: new Date().toISOString() } }];"
+      },
+      "id": "1a1b1c1d-0005-4a4a-8a8a-000000000005",
+      "name": "Parse & Validate JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-300, 260]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "fileSelector": "={{ $env.TASKS_FILE_PATH || '/data/tasks.json' }}",
+        "options": {}
+      },
+      "id": "1a1b1c1d-0006-4a4a-8a8a-000000000006",
+      "name": "Read Existing tasks.json",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [-80, 140],
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "fromJson",
+        "options": {}
+      },
+      "id": "1a1b1c1d-0007-4a4a-8a8a-000000000007",
+      "name": "Extract Existing Data",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [140, 140],
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Existing data (may be missing on first run)\nlet existing = [];\ntry {\n  const extracted = $('Extract Existing Data').first();\n  if (extracted && extracted.json && Array.isArray(extracted.json.tasks)) {\n    existing = extracted.json.tasks;\n  } else if (extracted && Array.isArray(extracted.json)) {\n    existing = extracted.json;\n  }\n} catch (e) {\n  existing = [];\n}\n\nconst newBatch = $('Parse & Validate JSON').first().json;\nconst merged = existing.concat(newBatch.tasks);\n\nreturn [{\n  json: {\n    tasks: merged,\n    lastRun: {\n      tasks: newBatch.tasks,\n      sourceText: newBatch.sourceText,\n      processedAt: newBatch.processedAt\n    }\n  }\n}];"
+      },
+      "id": "1a1b1c1d-0008-4a4a-8a8a-000000000008",
+      "name": "Merge With Existing",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [360, 260]
+    },
+    {
+      "parameters": {
+        "operation": "toJson",
+        "options": {}
+      },
+      "id": "1a1b1c1d-0009-4a4a-8a8a-000000000009",
+      "name": "Convert To File",
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [580, 260]
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "={{ $env.TASKS_FILE_PATH || '/data/tasks.json' }}",
+        "options": {}
+      },
+      "id": "1a1b1c1d-0010-4a4a-8a8a-000000000010",
+      "name": "Save to tasks.json",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [800, 260]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { tasks: $('Merge With Existing').item.json.lastRun.tasks } }}",
+        "options": {}
+      },
+      "id": "1a1b1c1d-0011-4a4a-8a8a-000000000011",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1020, 260]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Normalize Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Input": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "AI Extract Tasks (OpenRouter)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Extract Tasks (OpenRouter)": {
+      "main": [
+        [
+          {
+            "node": "Parse & Validate JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse & Validate JSON": {
+      "main": [
+        [
+          {
+            "node": "Read Existing tasks.json",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Existing tasks.json": {
+      "main": [
+        [
+          {
+            "node": "Extract Existing Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Existing Data": {
+      "main": [
+        [
+          {
+            "node": "Merge With Existing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge With Existing": {
+      "main": [
+        [
+          {
+            "node": "Convert To File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Convert To File": {
+      "main": [
+        [
+          {
+            "node": "Save to tasks.json",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save to tasks.json": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": "ai-task-extraction-demo"
+  }
+}

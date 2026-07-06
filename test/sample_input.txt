@@ -1,0 +1,6 @@
+Quick sync notes - not organized, sorry:
+
+ok so sara needs to send the client update today, that's high priority since the client is annoyed already.
+ahmed said he'll fix the login bug on the app, no real deadline but let's say by friday, medium priority i guess.
+also someone needs to prepare the slides for monday's board meeting - nobody volunteered yet so leave owner blank.
+low priority but bilal mentioned he wants to clean up the old test data sometime next week.
